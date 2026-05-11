@@ -1,0 +1,679 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GPX Route Editor</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            display: flex;
+            height: 100vh;
+            background: #1a1a2e;
+            color: #e0e0e0;
+            overflow: hidden;
+        }
+
+        #sidebar {
+            width: 300px;
+            min-width: 300px;
+            background: #16213e;
+            padding: 16px;
+            display: flex;
+            flex-direction: column;
+            gap: 14px;
+            overflow-y: auto;
+            border-right: 1px solid #0f3460;
+            z-index: 1000;
+        }
+
+        #map { flex: 1; }
+
+        h1 { font-size: 17px; color: #e94560; font-weight: 700; letter-spacing: -0.3px; }
+        h2 { font-size: 11px; text-transform: uppercase; letter-spacing: 1px; color: #666; margin-bottom: 6px; }
+
+        .upload-area {
+            border: 2px dashed #0f3460;
+            border-radius: 8px;
+            padding: 20px 16px;
+            text-align: center;
+            cursor: pointer;
+            transition: all 0.2s;
+            background: rgba(15,52,96,0.2);
+        }
+        .upload-area:hover, .upload-area.dragover {
+            border-color: #e94560;
+            background: rgba(233,69,96,0.07);
+        }
+        .upload-area .icon { font-size: 28px; margin-bottom: 6px; }
+        .upload-area p { font-size: 12px; color: #666; margin-top: 4px; }
+        .upload-area strong { color: #ccc; font-size: 13px; }
+        #fileInput { display: none; }
+
+        .stats-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 6px;
+        }
+        .stat-card {
+            background: #0f3460;
+            border-radius: 6px;
+            padding: 8px 10px;
+        }
+        .stat-card .label { font-size: 10px; color: #666; text-transform: uppercase; letter-spacing: 0.5px; }
+        .stat-card .value { font-size: 17px; font-weight: 700; color: #e0e0e0; margin-top: 1px; line-height: 1; }
+        .stat-card .unit { font-size: 10px; color: #666; margin-top: 1px; }
+
+        .btn {
+            padding: 9px 14px;
+            border: none;
+            border-radius: 6px;
+            font-size: 13px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.15s;
+            width: 100%;
+            text-align: center;
+        }
+        .btn-primary { background: #e94560; color: white; }
+        .btn-primary:hover:not(:disabled) { background: #c73652; }
+        .btn-secondary { background: #0f3460; color: #ccc; }
+        .btn-secondary:hover:not(:disabled) { background: #1a4a80; }
+        .btn-success { background: #27ae60; color: white; }
+        .btn-success:hover:not(:disabled) { background: #219a52; }
+        .btn-warning { background: #e67e22; color: white; font-size: 12px; padding: 7px 12px; }
+        .btn-warning:hover:not(:disabled) { background: #ca6f1e; }
+        .btn-sm-danger {
+            background: rgba(231,76,60,0.2);
+            color: #e74c3c;
+            border: 1px solid rgba(231,76,60,0.3);
+            font-size: 11px;
+            padding: 3px 8px;
+            width: auto;
+            border-radius: 4px;
+            cursor: pointer;
+            transition: all 0.15s;
+        }
+        .btn-sm-danger:hover { background: rgba(231,76,60,0.4); }
+        .btn:disabled { opacity: 0.35; cursor: not-allowed; }
+        .btn-cutting { background: #e94560 !important; color: white !important; }
+
+        .mode-indicator {
+            text-align: center;
+            padding: 7px 10px;
+            border-radius: 6px;
+            font-size: 12px;
+            font-weight: 600;
+        }
+        .mode-normal { background: #0f3460; color: #666; }
+        .mode-cutting { background: rgba(233,69,96,0.15); color: #e94560; border: 1px solid rgba(233,69,96,0.4); }
+
+        .cut-list { display: flex; flex-direction: column; gap: 5px; min-height: 20px; }
+        .cut-item {
+            background: #0f3460;
+            border-radius: 6px;
+            padding: 7px 10px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            font-size: 12px;
+        }
+        .cut-name { font-weight: 700; color: #e94560; font-size: 11px; }
+        .cut-info { color: #666; font-size: 11px; margin-top: 1px; }
+        .cut-empty { font-size: 12px; color: #444; text-align: center; padding: 6px 0; }
+
+        .remaining-info {
+            font-size: 12px;
+            color: #2ecc71;
+            text-align: center;
+            padding: 6px;
+            background: rgba(46,204,113,0.08);
+            border-radius: 6px;
+            border: 1px solid rgba(46,204,113,0.2);
+        }
+
+        .status-bar {
+            background: #0d1b2a;
+            border-radius: 6px;
+            padding: 7px 10px;
+            font-size: 11px;
+            color: #666;
+            text-align: center;
+            border: 1px solid #0f3460;
+            margin-top: auto;
+        }
+
+        .section { display: flex; flex-direction: column; gap: 8px; }
+        .divider { border: none; border-top: 1px solid #0f3460; margin: 0; }
+
+        #filename {
+            font-size: 11px;
+            color: #888;
+            text-align: center;
+            background: #0d1b2a;
+            border-radius: 4px;
+            padding: 4px 8px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .btn-row { display: flex; gap: 6px; }
+        .btn-row .btn { flex: 1; }
+
+        /* Leaflet cursor override */
+        .leaflet-container.crosshair-mode { cursor: crosshair !important; }
+        .leaflet-container.crosshair-mode .leaflet-interactive { cursor: crosshair !important; }
+    </style>
+</head>
+<body>
+<div id="sidebar">
+    <h1>✂️ GPX Route Editor</h1>
+
+    <div class="upload-area" id="uploadArea">
+        <div class="icon">🗺️</div>
+        <strong>Drop GPX file here</strong>
+        <p>or click to browse</p>
+    </div>
+    <input type="file" id="fileInput" accept=".gpx">
+    <div id="filename" style="display:none"></div>
+
+    <hr class="divider">
+
+    <div class="section" id="statsSection" style="display:none">
+        <h2>Route Stats</h2>
+        <div class="stats-grid">
+            <div class="stat-card">
+                <div class="label">Distance</div>
+                <div class="value" id="statDistance">—</div>
+                <div class="unit">km</div>
+            </div>
+            <div class="stat-card">
+                <div class="label">Points</div>
+                <div class="value" id="statPoints">—</div>
+                <div class="unit">trackpoints</div>
+            </div>
+            <div class="stat-card">
+                <div class="label">Elev Gain</div>
+                <div class="value" id="statEleUp">—</div>
+                <div class="unit">m</div>
+            </div>
+            <div class="stat-card">
+                <div class="label">Elev Loss</div>
+                <div class="value" id="statEleDown">—</div>
+                <div class="unit">m</div>
+            </div>
+        </div>
+    </div>
+
+    <hr class="divider" id="cutDivider" style="display:none">
+
+    <div class="section" id="cutSection" style="display:none">
+        <h2>Snip Sections</h2>
+        <div class="mode-indicator mode-normal" id="modeIndicator">Click "Add Snip" then click on the route</div>
+        <div class="btn-row">
+            <button class="btn btn-secondary" id="btnAddCut">✂️ Add Snip</button>
+            <button class="btn btn-warning" id="btnClearCuts" style="display:none">Clear All</button>
+        </div>
+        <div class="cut-list" id="cutList">
+            <div class="cut-empty">No snips yet</div>
+        </div>
+        <div class="remaining-info" id="remainingInfo" style="display:none"></div>
+    </div>
+
+    <hr class="divider" id="exportDivider" style="display:none">
+
+    <div class="section" id="exportSection" style="display:none">
+        <h2>Export</h2>
+        <button class="btn btn-success" id="btnExport">💾 Save as GPX</button>
+    </div>
+
+    <div class="status-bar" id="statusBar">Load a GPX file to begin</div>
+</div>
+
+<div id="map"></div>
+
+<script>
+// ── MAP SETUP ──────────────────────────────────────────────────────────────────
+const map = L.map('map', { zoomControl: true });
+map.setView([20, 0], 2);
+
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
+    maxZoom: 19
+}).addTo(map);
+
+// ── STATE ─────────────────────────────────────────────────────────────────────
+let gpxDoc = null;
+let allPoints = [];   // { index, lat, lon, ele, time, node }
+let cuts = [];        // { id, start, end }
+let cutIdCounter = 0;
+let mode = 'normal';  // 'normal' | 'cut-start' | 'cut-end'
+let pendingCutStart = null;
+
+// Map layers
+let keptLines = [];
+let removedLines = [];
+let hoverMarker = null;
+let cutStartMarker = null;
+let previewLine = null;
+
+// Throttle for mousemove
+let lastHoverTs = 0;
+
+// ── DOM ───────────────────────────────────────────────────────────────────────
+const uploadArea   = document.getElementById('uploadArea');
+const fileInput    = document.getElementById('fileInput');
+const btnAddCut    = document.getElementById('btnAddCut');
+const btnClearCuts = document.getElementById('btnClearCuts');
+const btnExport    = document.getElementById('btnExport');
+const cutList      = document.getElementById('cutList');
+const statusBar    = document.getElementById('statusBar');
+const modeIndicator = document.getElementById('modeIndicator');
+const remainingInfo = document.getElementById('remainingInfo');
+
+// ── FILE UPLOAD ───────────────────────────────────────────────────────────────
+uploadArea.addEventListener('click', () => fileInput.click());
+fileInput.addEventListener('change', e => { if (e.target.files[0]) loadFile(e.target.files[0]); });
+uploadArea.addEventListener('dragover', e => { e.preventDefault(); uploadArea.classList.add('dragover'); });
+uploadArea.addEventListener('dragleave', () => uploadArea.classList.remove('dragover'));
+uploadArea.addEventListener('drop', e => {
+    e.preventDefault();
+    uploadArea.classList.remove('dragover');
+    if (e.dataTransfer.files[0]) loadFile(e.dataTransfer.files[0]);
+});
+
+function loadFile(file) {
+    const reader = new FileReader();
+    reader.onload = e => {
+        try { parseAndRender(e.target.result, file.name); }
+        catch (err) { setStatus('Error: ' + err.message); }
+    };
+    reader.readAsText(file);
+}
+
+// ── GPX PARSING ───────────────────────────────────────────────────────────────
+function parseAndRender(xml, filename) {
+    const parser = new DOMParser();
+    gpxDoc = parser.parseFromString(xml, 'text/xml');
+
+    if (gpxDoc.querySelector('parsererror')) throw new Error('Invalid XML in GPX file');
+
+    allPoints = [];
+    let idx = 0;
+
+    // Try track points first, then route points
+    let ptEls = Array.from(gpxDoc.querySelectorAll('trk trkseg trkpt'));
+    if (!ptEls.length) ptEls = Array.from(gpxDoc.querySelectorAll('rte rtept'));
+    if (!ptEls.length) throw new Error('No track points found in file');
+
+    ptEls.forEach(el => {
+        const lat = parseFloat(el.getAttribute('lat'));
+        const lon = parseFloat(el.getAttribute('lon'));
+        if (isNaN(lat) || isNaN(lon)) return;
+        allPoints.push({
+            index: idx++,
+            lat, lon,
+            ele:  el.querySelector('ele')  ? parseFloat(el.querySelector('ele').textContent)  : null,
+            time: el.querySelector('time') ? el.querySelector('time').textContent             : null,
+            node: el
+        });
+    });
+
+    if (!allPoints.length) throw new Error('No valid coordinates found');
+
+    // Reset
+    cuts = [];
+    cutIdCounter = 0;
+    cancelCutMode();
+
+    // UI
+    document.getElementById('filename').textContent = filename;
+    document.getElementById('filename').style.display = 'block';
+    show('statsSection', 'flex');
+    show('cutDivider');
+    show('cutSection', 'flex');
+    show('exportDivider');
+    show('exportSection', 'flex');
+    btnClearCuts.style.display = 'none';
+
+    updateStats(allPoints);
+    renderMap();
+    setStatus(`Loaded ${allPoints.length.toLocaleString()} trackpoints`);
+}
+
+function show(id, display = 'block') { document.getElementById(id).style.display = display; }
+
+// ── STATS ─────────────────────────────────────────────────────────────────────
+function haversine(lat1, lon1, lat2, lon2) {
+    const R = 6371000;
+    const dLat = (lat2 - lat1) * Math.PI / 180;
+    const dLon = (lon2 - lon1) * Math.PI / 180;
+    const a = Math.sin(dLat/2)**2 + Math.cos(lat1*Math.PI/180)*Math.cos(lat2*Math.PI/180)*Math.sin(dLon/2)**2;
+    return 2 * R * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+}
+
+function calcStats(pts) {
+    let dist = 0, up = 0, down = 0;
+    for (let i = 1; i < pts.length; i++) {
+        dist += haversine(pts[i-1].lat, pts[i-1].lon, pts[i].lat, pts[i].lon);
+        if (pts[i].ele != null && pts[i-1].ele != null) {
+            const d = pts[i].ele - pts[i-1].ele;
+            if (d > 0) up += d; else down -= d;
+        }
+    }
+    return { dist, up, down };
+}
+
+function updateStats(pts) {
+    const s = calcStats(pts);
+    document.getElementById('statDistance').textContent = (s.dist / 1000).toFixed(2);
+    document.getElementById('statPoints').textContent   = pts.length.toLocaleString();
+    document.getElementById('statEleUp').textContent    = Math.round(s.up);
+    document.getElementById('statEleDown').textContent  = Math.round(s.down);
+}
+
+// ── RANGE HELPERS ─────────────────────────────────────────────────────────────
+function mergeCuts() {
+    if (!cuts.length) return [];
+    const sorted = [...cuts].sort((a, b) => a.start - b.start);
+    const merged = [{ ...sorted[0] }];
+    for (let i = 1; i < sorted.length; i++) {
+        const last = merged[merged.length - 1];
+        if (sorted[i].start <= last.end + 1) last.end = Math.max(last.end, sorted[i].end);
+        else merged.push({ ...sorted[i] });
+    }
+    return merged;
+}
+
+function getKeptRanges() {
+    const n = allPoints.length - 1;
+    if (!cuts.length) return [[0, n]];
+    const merged = mergeCuts();
+    const kept = [];
+    let pos = 0;
+    for (const c of merged) {
+        if (pos < c.start) kept.push([pos, c.start - 1]);
+        pos = c.end + 1;
+    }
+    if (pos <= n) kept.push([pos, n]);
+    return kept;
+}
+
+function getRemovedRanges() {
+    return mergeCuts().map(c => [c.start, c.end]);
+}
+
+// ── MAP RENDERING ─────────────────────────────────────────────────────────────
+function clearMapLayers() {
+    [...keptLines, ...removedLines].forEach(l => map.removeLayer(l));
+    keptLines = [];
+    removedLines = [];
+    clearTempMarkers();
+}
+
+function clearTempMarkers() {
+    if (hoverMarker)     { map.removeLayer(hoverMarker);     hoverMarker = null; }
+    if (cutStartMarker)  { map.removeLayer(cutStartMarker);  cutStartMarker = null; }
+    if (previewLine)     { map.removeLayer(previewLine);     previewLine = null; }
+}
+
+function renderMap() {
+    clearMapLayers();
+    if (!allPoints.length) return;
+
+    const kept    = getKeptRanges();
+    const removed = getRemovedRanges();
+
+    kept.forEach(([s, e]) => {
+        if (e - s < 1) return;
+        const latlngs = allPoints.slice(s, e + 1).map(p => [p.lat, p.lon]);
+        keptLines.push(L.polyline(latlngs, { color: '#3498db', weight: 4, opacity: 0.9 }).addTo(map));
+    });
+
+    removed.forEach(([s, e]) => {
+        if (e - s < 1) return;
+        const latlngs = allPoints.slice(s, e + 1).map(p => [p.lat, p.lon]);
+        removedLines.push(L.polyline(latlngs, {
+            color: '#e74c3c', weight: 4, opacity: 0.75, dashArray: '8 5'
+        }).addTo(map));
+    });
+
+    if (keptLines.length || removedLines.length) {
+        const all = allPoints.map(p => [p.lat, p.lon]);
+        map.fitBounds(L.latLngBounds(all), { padding: [20, 20] });
+    }
+
+    renderCutList();
+    updateRemainingInfo(kept);
+}
+
+function updateRemainingInfo(keptRanges) {
+    if (!cuts.length) { remainingInfo.style.display = 'none'; return; }
+    const pts = keptRanges.flatMap(([s, e]) => allPoints.slice(s, e + 1));
+    const s = calcStats(pts);
+    remainingInfo.textContent = `Remaining: ${(s.dist / 1000).toFixed(2)} km · ${pts.length.toLocaleString()} pts`;
+    remainingInfo.style.display = 'block';
+}
+
+// ── CUT LIST ──────────────────────────────────────────────────────────────────
+function renderCutList() {
+    if (!cuts.length) {
+        cutList.innerHTML = '<div class="cut-empty">No snips yet</div>';
+        btnClearCuts.style.display = 'none';
+        return;
+    }
+    btnClearCuts.style.display = 'block';
+    cutList.innerHTML = '';
+    cuts.forEach(cut => {
+        const pts  = allPoints.slice(cut.start, cut.end + 1);
+        const dist = calcStats(pts).dist;
+        const div  = document.createElement('div');
+        div.className = 'cut-item';
+        div.innerHTML = `
+            <div>
+                <div class="cut-name">Snip #${cut.id}</div>
+                <div class="cut-info">pts ${cut.start}–${cut.end} · ${(dist/1000).toFixed(2)} km</div>
+            </div>
+            <button class="btn-sm-danger" onclick="removeCut(${cut.id})">✕ Remove</button>`;
+        cutList.appendChild(div);
+    });
+}
+
+function removeCut(id) {
+    cuts = cuts.filter(c => c.id !== id);
+    renderMap();
+    setStatus(cuts.length ? `${cuts.length} snip(s) remaining` : 'All snips removed');
+}
+
+btnClearCuts.addEventListener('click', () => {
+    cuts = [];
+    renderMap();
+    setStatus('All snips cleared');
+});
+
+// ── CUT MODE ──────────────────────────────────────────────────────────────────
+btnAddCut.addEventListener('click', () => {
+    if (!allPoints.length) return;
+    mode === 'normal' ? startCutMode() : cancelCutMode();
+});
+
+function startCutMode() {
+    mode = 'cut-start';
+    btnAddCut.textContent = '✕ Cancel Snip';
+    btnAddCut.classList.add('btn-cutting');
+    modeIndicator.textContent = 'Step 1: Click the START of the section to remove';
+    modeIndicator.className = 'mode-indicator mode-cutting';
+    map.getContainer().classList.add('crosshair-mode');
+}
+
+function cancelCutMode() {
+    mode = 'normal';
+    pendingCutStart = null;
+    btnAddCut.textContent = '✂️ Add Snip';
+    btnAddCut.classList.remove('btn-cutting');
+    modeIndicator.textContent = 'Click "Add Snip" then click on the route';
+    modeIndicator.className = 'mode-indicator mode-normal';
+    map.getContainer().classList.remove('crosshair-mode');
+    clearTempMarkers();
+}
+
+// ── NEAREST POINT ─────────────────────────────────────────────────────────────
+function findNearest(latlng) {
+    let best = null, bestDist = Infinity;
+    for (const pt of allPoints) {
+        const d = map.distance(latlng, L.latLng(pt.lat, pt.lon));
+        if (d < bestDist) { bestDist = d; best = pt; }
+    }
+    return best;
+}
+
+// ── MAP EVENTS ────────────────────────────────────────────────────────────────
+map.on('mousemove', e => {
+    if (mode === 'normal' || !allPoints.length) return;
+    const now = Date.now();
+    if (now - lastHoverTs < 40) return;
+    lastHoverTs = now;
+
+    const nearest = findNearest(e.latlng);
+    if (!nearest) return;
+
+    if (!hoverMarker) {
+        hoverMarker = L.circleMarker([nearest.lat, nearest.lon], {
+            radius: 6, color: '#fff', fillColor: '#e94560', fillOpacity: 1, weight: 2, interactive: false
+        }).addTo(map);
+    } else {
+        hoverMarker.setLatLng([nearest.lat, nearest.lon]);
+    }
+
+    if (mode === 'cut-end' && pendingCutStart !== null) {
+        const s = Math.min(pendingCutStart, nearest.index);
+        const e2 = Math.max(pendingCutStart, nearest.index);
+        const latlngs = allPoints.slice(s, e2 + 1).map(p => [p.lat, p.lon]);
+        if (!previewLine) {
+            previewLine = L.polyline(latlngs, {
+                color: '#e74c3c', weight: 5, opacity: 0.85, interactive: false
+            }).addTo(map);
+        } else {
+            previewLine.setLatLngs(latlngs);
+        }
+    }
+});
+
+map.on('click', e => {
+    if (mode === 'normal' || !allPoints.length) return;
+
+    const nearest = findNearest(e.latlng);
+    if (!nearest) return;
+
+    if (mode === 'cut-start') {
+        pendingCutStart = nearest.index;
+        mode = 'cut-end';
+
+        if (cutStartMarker) map.removeLayer(cutStartMarker);
+        cutStartMarker = L.circleMarker([nearest.lat, nearest.lon], {
+            radius: 9, color: '#fff', fillColor: '#e94560', fillOpacity: 1, weight: 2, interactive: false
+        }).addTo(map);
+
+        modeIndicator.textContent = 'Step 2: Click the END of the section to remove';
+        setStatus(`Start locked at point ${nearest.index} — now click the end`);
+
+    } else if (mode === 'cut-end') {
+        const start = Math.min(pendingCutStart, nearest.index);
+        const end   = Math.max(pendingCutStart, nearest.index);
+
+        if (start === end) {
+            setStatus('Start and end are the same — click a different point for the end');
+            return;
+        }
+
+        cuts.push({ id: ++cutIdCounter, start, end });
+        const pts  = allPoints.slice(start, end + 1);
+        const dist = (calcStats(pts).dist / 1000).toFixed(2);
+        cancelCutMode();
+        renderMap();
+        setStatus(`Snip #${cutIdCounter} added: ${dist} km removed (pts ${start}–${end})`);
+    }
+});
+
+document.addEventListener('keydown', e => {
+    if (e.key === 'Escape' && mode !== 'normal') cancelCutMode();
+});
+
+// ── EXPORT ────────────────────────────────────────────────────────────────────
+btnExport.addEventListener('click', exportGPX);
+
+function exportGPX() {
+    if (!gpxDoc || !allPoints.length) return;
+
+    const keptRanges = getKeptRanges();
+
+    // Collect kept segments, splitting on gaps
+    const gpxEl   = gpxDoc.querySelector('gpx');
+    const creator = (gpxEl?.getAttribute('creator') || 'GPX Route Editor') + ' (edited)';
+    const version = gpxEl?.getAttribute('version') || '1.1';
+
+    const metaEl   = gpxDoc.querySelector('metadata');
+    const metaXml  = metaEl ? metaEl.outerHTML : '';
+    const nameEl   = gpxDoc.querySelector('trk > name');
+    const trkName  = nameEl ? nameEl.textContent : 'Edited Route';
+
+    let trksegsXml = '';
+    keptRanges.forEach(([s, e]) => {
+        if (e - s < 1) return;
+        trksegsXml += '  <trkseg>\n';
+        for (let i = s; i <= e; i++) {
+            const pt = allPoints[i];
+            let ptXml = `    <trkpt lat="${pt.lat}" lon="${pt.lon}">`;
+            if (pt.ele != null) ptXml += `<ele>${pt.ele}</ele>`;
+            if (pt.time)        ptXml += `<time>${pt.time}</time>`;
+            // Preserve extension elements (heart rate, cadence, etc.)
+            if (pt.node) {
+                Array.from(pt.node.children).forEach(child => {
+                    const tag = child.tagName.toLowerCase();
+                    if (tag !== 'ele' && tag !== 'time') ptXml += child.outerHTML;
+                });
+            }
+            ptXml += '</trkpt>\n';
+            trksegsXml += ptXml;
+        }
+        trksegsXml += '  </trkseg>\n';
+    });
+
+    const xml = `<?xml version="1.0" encoding="UTF-8"?>
+<gpx version="${version}" creator="${escapeXml(creator)}"
+  xmlns="http://www.topografix.com/GPX/1/1"
+  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+  xsi:schemaLocation="http://www.topografix.com/GPX/1/1 http://www.topografix.com/GPX/1/1/gpx.xsd">
+${metaXml}
+<trk>
+  <name>${escapeXml(trkName)} (edited)</name>
+${trksegsXml}</trk>
+</gpx>`;
+
+    const blob = new Blob([xml], { type: 'application/gpx+xml' });
+    const url  = URL.createObjectURL(blob);
+    const a    = document.createElement('a');
+    a.href     = url;
+    a.download = 'edited_route.gpx';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+
+    const keptPts  = keptRanges.flatMap(([s, e]) => allPoints.slice(s, e + 1));
+    const dist     = (calcStats(keptPts).dist / 1000).toFixed(2);
+    setStatus(`Saved! ${dist} km across ${keptRanges.length} segment(s)`);
+}
+
+function escapeXml(str) {
+    return str.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+function setStatus(msg) { statusBar.textContent = msg; }
+</script>
+</body>
+</html>
