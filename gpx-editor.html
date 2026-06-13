@@ -6,6 +6,7 @@
     <title>GPX Route Editor</title>
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
@@ -30,7 +31,67 @@
             z-index: 1000;
         }
 
-        #map { flex: 1; }
+        #main-right {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        #map { flex: 1; min-height: 0; }
+
+        #chart-panel {
+            display: none;
+            background: #16213e;
+            border-top: 1px solid #0f3460;
+            padding: 10px 14px 8px;
+            height: 220px;
+            min-height: 220px;
+            flex-shrink: 0;
+            position: relative;
+            flex-direction: column;
+        }
+        #chart-header {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-bottom: 4px;
+            flex-shrink: 0;
+        }
+        #chart-header h2 { font-size: 11px; text-transform: uppercase; letter-spacing: 1px; color: #666; margin: 0; flex-shrink: 0; }
+        #power-adjust {
+            display: none;
+            align-items: center;
+            gap: 7px;
+            flex: 1;
+        }
+        #power-adjust .sel-label { font-size: 11px; color: #888; white-space: nowrap; }
+        #power-adjust input[type=number] {
+            width: 62px;
+            background: #0f3460;
+            border: 1px solid #1a4a80;
+            border-radius: 4px;
+            color: #e0e0e0;
+            font-size: 12px;
+            padding: 3px 6px;
+            text-align: right;
+        }
+        #power-adjust .pct-label { font-size: 12px; color: #888; }
+        .btn-chart {
+            padding: 3px 10px;
+            border: none;
+            border-radius: 4px;
+            font-size: 11px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.15s;
+        }
+        .btn-chart-apply  { background: #27ae60; color: white; }
+        .btn-chart-apply:hover  { background: #219a52; }
+        .btn-chart-clear  { background: #0f3460; color: #aaa; }
+        .btn-chart-clear:hover  { background: #1a4a80; }
+        #chart-canvas-wrap { flex: 1; min-height: 0; position: relative; cursor: crosshair; }
+        #chart-canvas-wrap canvas { display: block; }
 
         h1 { font-size: 17px; color: #e94560; font-weight: 700; letter-spacing: -0.3px; }
         h2 { font-size: 11px; text-transform: uppercase; letter-spacing: 1px; color: #666; margin-bottom: 6px; }
@@ -207,6 +268,11 @@
                 <div class="unit">m</div>
             </div>
         </div>
+        <div class="stat-card" id="statStartCard" style="display:none">
+            <div class="label">Start</div>
+            <div class="value" id="statStartTime" style="font-size:13px">—</div>
+            <div class="unit" id="statStartDate">—</div>
+        </div>
     </div>
 
     <hr class="divider" id="cutDivider" style="display:none">
@@ -234,7 +300,24 @@
     <div class="status-bar" id="statusBar">Load a GPX file to begin</div>
 </div>
 
-<div id="map"></div>
+<div id="main-right">
+    <div id="map"></div>
+    <div id="chart-panel">
+        <div id="chart-header">
+            <h2>Power</h2>
+            <div id="power-adjust">
+                <span class="sel-label" id="selectionLabel"></span>
+                <input type="number" id="powerPct" value="0" min="-99" max="500" step="1">
+                <span class="pct-label">%</span>
+                <button class="btn-chart btn-chart-apply" onclick="applyPowerAdjustment()">Apply</button>
+                <button class="btn-chart btn-chart-clear" onclick="clearChartSelection()">Clear</button>
+            </div>
+        </div>
+        <div id="chart-canvas-wrap">
+            <canvas id="powerChart"></canvas>
+        </div>
+    </div>
+</div>
 
 <script>
 // ── MAP SETUP ──────────────────────────────────────────────────────────────────
@@ -314,12 +397,28 @@ function parseAndRender(xml, filename) {
         const lat = parseFloat(el.getAttribute('lat'));
         const lon = parseFloat(el.getAttribute('lon'));
         if (isNaN(lat) || isNaN(lon)) return;
+
+        // Power: <power> direct child OR inside <extensions> (Garmin/Wahoo)
+        let power = null;
+        const directPower = el.querySelector('power');
+        if (directPower) {
+            power = parseFloat(directPower.textContent);
+        } else {
+            const ext = el.querySelector('extensions');
+            if (ext) {
+                // matches <power>, <gpxtpx:power>, <ns3:power>, etc.
+                const pw = Array.from(ext.querySelectorAll('*')).find(n => n.localName === 'power');
+                if (pw) power = parseFloat(pw.textContent);
+            }
+        }
+
         allPoints.push({
             index: idx++,
             lat, lon,
-            ele:  el.querySelector('ele')  ? parseFloat(el.querySelector('ele').textContent)  : null,
-            time: el.querySelector('time') ? el.querySelector('time').textContent             : null,
-            node: el
+            ele:   el.querySelector('ele')  ? parseFloat(el.querySelector('ele').textContent)  : null,
+            time:  el.querySelector('time') ? el.querySelector('time').textContent             : null,
+            power: (power != null && !isNaN(power)) ? power : null,
+            node:  el
         });
     });
 
@@ -342,6 +441,7 @@ function parseAndRender(xml, filename) {
 
     updateStats(allPoints);
     renderMap();
+    renderPowerChart();
     setStatus(`Loaded ${allPoints.length.toLocaleString()} trackpoints`);
 }
 
@@ -374,6 +474,17 @@ function updateStats(pts) {
     document.getElementById('statPoints').textContent   = pts.length.toLocaleString();
     document.getElementById('statEleUp').textContent    = Math.round(s.up);
     document.getElementById('statEleDown').textContent  = Math.round(s.down);
+
+    const firstTime = pts.find(p => p.time)?.time;
+    const card = document.getElementById('statStartCard');
+    if (firstTime) {
+        const d = new Date(firstTime);
+        document.getElementById('statStartTime').textContent = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        document.getElementById('statStartDate').textContent = d.toLocaleDateString([], { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' });
+        card.style.display = 'block';
+    } else {
+        card.style.display = 'none';
+    }
 }
 
 // ── RANGE HELPERS ─────────────────────────────────────────────────────────────
@@ -674,6 +785,223 @@ function escapeXml(str) {
 }
 
 function setStatus(msg) { statusBar.textContent = msg; }
+
+// ── POWER CHART ───────────────────────────────────────────────────────────────
+let powerChart    = null;
+let chartHoverMarker = null;
+let chartLabels   = [];   // x-axis values, parallel to allPoints
+
+// Selection state
+let sel = { active: false, startIdx: null, endIdx: null };
+let isDragging = false;
+
+// Inline Chart.js plugin: draws the selection highlight rectangle
+const selectionPlugin = {
+    id: 'selectionHighlight',
+    afterDraw(chart) {
+        if (sel.startIdx === null || sel.endIdx === null) return;
+        const s = Math.min(sel.startIdx, sel.endIdx);
+        const e = Math.max(sel.startIdx, sel.endIdx);
+        if (s === e) return;
+        const { ctx, scales: { x, y } } = chart;
+        const x1 = x.getPixelForValue(chartLabels[s]);
+        const x2 = x.getPixelForValue(chartLabels[e]);
+        ctx.save();
+        ctx.fillStyle = 'rgba(243,156,18,0.18)';
+        ctx.fillRect(x1, y.top, x2 - x1, y.bottom - y.top);
+        ctx.strokeStyle = 'rgba(243,156,18,0.55)';
+        ctx.lineWidth = 1;
+        ctx.strokeRect(x1, y.top, x2 - x1, y.bottom - y.top);
+        ctx.restore();
+    }
+};
+
+function pixelToPointIndex(clientX) {
+    if (!powerChart) return null;
+    const canvas = powerChart.canvas;
+    const rect   = canvas.getBoundingClientRect();
+    const pixelX = clientX - rect.left;
+    const xScale = powerChart.scales.x;
+    const xVal   = xScale.getValueForPixel(pixelX);
+    // clamp to chart area
+    if (xVal <= chartLabels[0]) return 0;
+    if (xVal >= chartLabels[chartLabels.length - 1]) return chartLabels.length - 1;
+    // binary search nearest label
+    let lo = 0, hi = chartLabels.length - 1;
+    while (lo < hi - 1) {
+        const mid = (lo + hi) >> 1;
+        if (chartLabels[mid] <= xVal) lo = mid; else hi = mid;
+    }
+    return Math.abs(chartLabels[lo] - xVal) <= Math.abs(chartLabels[hi] - xVal) ? lo : hi;
+}
+
+function updateSelectionUI() {
+    const adj = document.getElementById('power-adjust');
+    if (sel.startIdx === null || sel.endIdx === null || sel.startIdx === sel.endIdx) {
+        adj.style.display = 'none';
+        return;
+    }
+    const s = Math.min(sel.startIdx, sel.endIdx);
+    const e = Math.max(sel.startIdx, sel.endIdx);
+    document.getElementById('selectionLabel').textContent = `${e - s + 1} pts selected`;
+    adj.style.display = 'flex';
+}
+
+function clearChartSelection() {
+    sel = { active: false, startIdx: null, endIdx: null };
+    isDragging = false;
+    document.getElementById('power-adjust').style.display = 'none';
+    document.getElementById('powerPct').value = '0';
+    if (powerChart) powerChart.update('none');
+}
+
+function applyPowerAdjustment() {
+    if (sel.startIdx === null || sel.endIdx === null) return;
+    const pct = parseFloat(document.getElementById('powerPct').value);
+    if (isNaN(pct)) return;
+    const factor = 1 + pct / 100;
+    const s = Math.min(sel.startIdx, sel.endIdx);
+    const e = Math.max(sel.startIdx, sel.endIdx);
+    for (let i = s; i <= e; i++) {
+        if (allPoints[i].power != null) {
+            allPoints[i].power = Math.max(0, Math.round(allPoints[i].power * factor));
+            // update the XML node so export preserves the change
+            if (allPoints[i].node) {
+                let pwEl = allPoints[i].node.querySelector('power');
+                if (!pwEl) {
+                    const ext = allPoints[i].node.querySelector('extensions');
+                    if (ext) pwEl = Array.from(ext.querySelectorAll('*')).find(n => n.localName === 'power');
+                }
+                if (pwEl) pwEl.textContent = allPoints[i].power;
+            }
+        }
+    }
+    clearChartSelection();
+    renderPowerChart();
+    setStatus(`Power adjusted by ${pct > 0 ? '+' : ''}${pct}% across ${e - s + 1} points`);
+}
+
+function renderPowerChart() {
+    const panel = document.getElementById('chart-panel');
+    const hasPower = allPoints.some(p => p.power != null);
+    if (!hasPower) { panel.style.display = 'none'; destroyChart(); return; }
+
+    panel.style.display = 'flex';
+
+    const firstTime = allPoints.find(p => p.time)?.time;
+    const t0 = firstTime ? new Date(firstTime).getTime() : null;
+
+    chartLabels = allPoints.map(p => {
+        if (t0 && p.time) return +(( new Date(p.time).getTime() - t0) / 60000).toFixed(2);
+        return p.index;
+    });
+
+    const data = allPoints.map(p => p.power);
+
+    destroyChart();
+    const canvas = document.getElementById('powerChart');
+    powerChart = new Chart(canvas, {
+        type: 'line',
+        data: {
+            labels: chartLabels,
+            datasets: [{
+                data,
+                borderColor: '#e94560',
+                backgroundColor: 'rgba(233,69,96,0.12)',
+                borderWidth: 1.5,
+                pointRadius: 0,
+                tension: 0.2,
+                fill: true,
+                spanGaps: true,
+            }]
+        },
+        options: {
+            animation: false,
+            responsive: true,
+            maintainAspectRatio: false,
+            onHover: (event, elements) => {
+                if (isDragging) return;
+                if (elements.length) {
+                    const pt = allPoints[elements[0].index];
+                    if (!pt) return;
+                    if (!chartHoverMarker) {
+                        chartHoverMarker = L.circleMarker([pt.lat, pt.lon], {
+                            radius: 8, color: '#fff', fillColor: '#f39c12',
+                            fillOpacity: 1, weight: 2, interactive: false
+                        }).addTo(map);
+                    } else {
+                        chartHoverMarker.setLatLng([pt.lat, pt.lon]);
+                    }
+                } else {
+                    clearChartHoverMarker();
+                }
+            },
+            plugins: {
+                legend: { display: false },
+                tooltip: {
+                    filter: () => !isDragging,
+                    callbacks: {
+                        title: items => t0 ? `${items[0].parsed.x} min` : `Point ${items[0].parsed.x}`,
+                        label: item => `${item.parsed.y != null ? Math.round(item.parsed.y) : '—'} W`,
+                    }
+                },
+            },
+            scales: {
+                x: {
+                    type: 'linear',
+                    title: { display: true, text: t0 ? 'Time (min)' : 'Point index', color: '#555', font: { size: 10 } },
+                    ticks: { color: '#555', maxTicksLimit: 8, font: { size: 10 } },
+                    grid: { color: '#1e2d4a' },
+                },
+                y: {
+                    title: { display: true, text: 'Power (W)', color: '#555', font: { size: 10 } },
+                    ticks: { color: '#555', font: { size: 10 } },
+                    grid: { color: '#1e2d4a' },
+                }
+            }
+        },
+        plugins: [selectionPlugin],
+    });
+
+    // ── drag-select on canvas ──────────────────────────────────────────────────
+    const wrap = document.getElementById('chart-canvas-wrap');
+
+    wrap.addEventListener('mousedown', e => {
+        if (e.button !== 0) return;
+        isDragging = true;
+        const idx = pixelToPointIndex(e.clientX);
+        sel.startIdx = idx;
+        sel.endIdx   = idx;
+        powerChart.update('none');
+    });
+
+    wrap.addEventListener('mousemove', e => {
+        if (!isDragging) return;
+        sel.endIdx = pixelToPointIndex(e.clientX);
+        powerChart.update('none');
+    });
+
+    const finishDrag = () => {
+        if (!isDragging) return;
+        isDragging = false;
+        updateSelectionUI();
+        if (powerChart) powerChart.update('none');
+    };
+    wrap.addEventListener('mouseup', finishDrag);
+    wrap.addEventListener('mouseleave', e => {
+        clearChartHoverMarker();
+        if (isDragging) finishDrag();
+    });
+}
+
+function destroyChart() {
+    if (powerChart) { powerChart.destroy(); powerChart = null; }
+    clearChartHoverMarker();
+}
+
+function clearChartHoverMarker() {
+    if (chartHoverMarker) { map.removeLayer(chartHoverMarker); chartHoverMarker = null; }
+}
 </script>
 </body>
 </html>
